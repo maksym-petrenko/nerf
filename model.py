@@ -2,52 +2,58 @@ import torch.nn as nn
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
+from tqdm import tqdm
 
 
 class NeRF(nn.Module):
 
     def __init__(self,
-            L: int,
+            pos_L: int = 10,
+            cam_L: int = 4,
+            device: str = "cuda"
         ) -> None:
         super().__init__()
-        self.L = L
+        self.pos_L = pos_L
+        self.cam_L = cam_L
 
         self.block_1 = nn.Sequential(
-            nn.Linear(self.L * 6 + 3, 256), nn.ReLU(),
+            nn.Linear(self.pos_L * 6 + 3, 256), nn.ReLU(),
             nn.Linear(256, 256), nn.ReLU(),
             nn.Linear(256, 256), nn.ReLU(),
             nn.Linear(256, 256), nn.ReLU()
         )
 
         self.block_2 = nn.Sequential(
-            nn.Linear(self.L * 6 + 259, 256), nn.ReLU(),
+            nn.Linear(self.pos_L * 6 + 259, 256), nn.ReLU(),
             nn.Linear(256, 256), nn.ReLU(),
             nn.Linear(256, 256), nn.ReLU(),
             nn.Linear(256, 256), nn.ReLU()
         )
 
-        self.block_3 = nn.Sequential(nn.Linear(self.L * 4 + 258, 128), nn.ReLU())
+        self.block_3 = nn.Sequential(nn.Linear(self.cam_L * 4 + 258, 128), nn.ReLU())
 
         self.block_4 = nn.Sequential(nn.Linear(128, 3), nn.Sigmoid())
 
+        self.device = device
 
-    def positional_encoding(self, x):
+
+    def positional_encoding(self, x, L):
         x = torch.tensor(x)
 
         if len(x.shape) != 1:
             raise ValueError("Input tensor must be 1-dimensional (shape: (n,)).")
 
-        encoding = torch.zeros(x.shape[0], self.L * 2)
+        encoding = torch.zeros(x.shape[0], L * 2)
 
-        for power in range(self.L):
+        for power in range(L):
             encoding[:, power * 2] = torch.sin((2 ** power) * torch.pi * x)
             encoding[:, power * 2 + 1] = torch.cos((2 ** power) * torch.pi * x)
 
-        return torch.cat((torch.flatten(x), torch.flatten(encoding)))
+        return torch.cat((x, encoding), dim=1)
 
     def forward(self, position, direction):
-        encoded_pos = self.positional_encoding(position)
-        encoded_dir = self.positional_encoding(direction)
+        encoded_pos = self.positional_encoding(position, self.pos_L)
+        encoded_dir = self.positional_encoding(direction, self.cam_L)
 
         hidden_1 = self.block_1(encoded_pos)
         hidden_input_1 = torch.cat(hidden_1, encoded_pos)
@@ -112,11 +118,37 @@ class NeRF(nn.Module):
         plt.savefig(f'novel_views/img_{img_index}.png', bbox_inches='tight')
         plt.close()
 
+    def train(self, optimizer, scheduler, train_data, test_data, tn=0, tf=1, epochs=1, samples=128, height=400, width=400):
+        training_loss = []
+        for _ in range(epochs):
+            for batch in tqdm(train_data):
+                origins = batch[:, :3].to(self.device)
+                directions = batch[:, 3:6].to(self.device)
+                ground_truth_px_values = batch[:, 6:].to(self.device)
+
+                regenerated_px_values = self.render_image(origins, directions, tn=tn, tf=tf, samples=samples)
+                loss = ((ground_truth_px_values - regenerated_px_values) ** 2).sum()
+
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
+                training_loss.append(loss.item())
+            scheduler.step()
+
+            for img_index in range(200):
+                self.test(tn, tf, test_data, img_index=img_index, samples=samples, height=height, width=width)
+        return training_loss
 
 
+device = 'cpu'
 
-model = NeRF(1)
+training_dataset = torch.from_numpy(np.load('training_data.pkl', allow_pickle=True))
+testing_dataset = torch.from_numpy(np.load('testing_data.pkl', allow_pickle=True))
 
-arr = torch.tensor([0.5,0.24,0.124])
+model = NeRF().to(device)
+model_optimizer = torch.optim.Adam(model.parameters(), lr=5e-4)
+scheduler = torch.optim.lr_scheduler.MultiStepLR(model_optimizer, milestones=[2, 4, 8], gamma=0.5)
 
-print(model.compute_t(arr))
+data_loader = torch.utils.data.DataLoader(training_dataset, batch_size=1024, shuffle=True)
+
+model.train(model, model_optimizer, scheduler, data_loader, epochs=16, tn=2, tf=6, samples=128, height=400, width=400)
