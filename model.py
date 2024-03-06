@@ -1,5 +1,7 @@
 import torch.nn as nn
 import torch
+import numpy as np
+import matplotlib.pyplot as plt
 
 
 class NeRF(nn.Module):
@@ -65,8 +67,52 @@ class NeRF(nn.Module):
         transformed = 1 - alphas
         return torch.cumprod(transformed, dim=0)
 
-    def render_image(self, ):
-        pass
+    def render_image(self, origins, directions, tn = 0, tf = 1, samples = 128):
+
+        device = origins.device
+        t = torch.linspace(tn, tf, samples, device=device).expand(origins.shape[0], samples)
+
+        mid = (t[:-1] + t[1:]) / 2.
+        lower = torch.cat((t[:1], mid), -1)
+        upper = torch.cat((mid, t[-1:]), -1)
+        u = torch.rand(t.shape, device=device)
+        t = lower + (upper - lower) * u
+
+        delta = t[1:] - t[:-1]
+
+        coords = origins + t * directions
+
+        colors, sigma = self(coords, directions)
+
+        alpha = 1 - torch.exp(-sigma * delta)
+
+        weights = self.compute_t(alpha) * alpha
+        c = (weights * colors).sum(dim=1)
+
+        return c
+
+    @torch.no_grad()
+    def test(self, tn, tf, dataset, chunk_size=10, img_index=0, samples=128, height=400, width=400):
+        device = self.device
+
+        origins = dataset[img_index * height * width: (img_index + 1) * height * width, :3]
+        directions = dataset[img_index * height * width: (img_index + 1) * height * width, 3:6]
+
+        data = []
+        for i in range(int(np.ceil(height / chunk_size))):
+            ray_origins = origins[i * width * chunk_size: (i + 1) * width * chunk_size].to(device)
+            ray_directions = directions[i * width * chunk_size: (i + 1) * width * chunk_size].to(device)
+
+            regenerated_px_values = self.render_image(model, ray_origins, ray_directions, tn=tn, tf=tf, samples=samples)
+            data.append(regenerated_px_values)
+        img = torch.cat(data).data.cpu().numpy().reshape(height, width, 3)
+
+        plt.figure()
+        plt.imshow(img)
+        plt.savefig(f'novel_views/img_{img_index}.png', bbox_inches='tight')
+        plt.close()
+
+
 
 
 model = NeRF(1)
