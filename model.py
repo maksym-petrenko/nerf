@@ -27,52 +27,45 @@ class NeRF(nn.Module):
             nn.Linear(self.pos_L * 6 + 259, 256), nn.ReLU(),
             nn.Linear(256, 256), nn.ReLU(),
             nn.Linear(256, 256), nn.ReLU(),
-            nn.Linear(256, 256), nn.ReLU()
+            nn.Linear(256, 257), nn.ReLU()
         )
 
-        self.block_3 = nn.Sequential(nn.Linear(self.cam_L * 4 + 258, 128), nn.ReLU())
+        self.block_3 = nn.Sequential(nn.Linear(self.cam_L * 6 + 259, 128), nn.ReLU())
 
         self.block_4 = nn.Sequential(nn.Linear(128, 3), nn.Sigmoid())
 
         self.device = device
 
 
-    @staticmethod
-    def positional_encoding(x, L):
-        encoding = torch.zeros(x.shape[0], L * 2 * x.shape[1])
+    def positional_encoding(self, x, L):
+        encoding = torch.zeros(x.shape[0], L * 2 * x.shape[1]).to(self.device)
         for power in range(L):
-            encoding[:, power * 2:power * 2 + x.shape[1]] = torch.sin((2 ** power) * torch.pi * x)
-            encoding[:, power * 2 + x.shape[1]:power * 2 + 2 * x.shape[1]] = torch.cos((2 ** power) * torch.pi * x)
+            encoding[:, power * 2:power * 2 + x.shape[1]] = torch.sin((2 ** power) * torch.pi * x).to(self.device)
+            encoding[:, power * 2 + x.shape[1]:power * 2 + 2 * x.shape[1]] = torch.cos((2 ** power) * torch.pi * x).to(self.device)
 
-        return torch.cat((x, encoding), dim=1)
+        return torch.cat((x, encoding), dim=1).to(self.device)
 
     def forward(self, position, direction):
         encoded_pos = self.positional_encoding(position, self.pos_L)
         encoded_dir = self.positional_encoding(direction, self.cam_L)
 
         hidden_1 = self.block_1(encoded_pos)
-        print(hidden_1.shape)
-        print(encoded_pos.shape)
-        hidden_input_1 = torch.cat((hidden_1, encoded_pos))
+        hidden_input_1 = torch.cat((hidden_1, encoded_pos), dim=1)
 
         hidden_output_1 = self.block_2(hidden_input_1)
-        hidden_input_2, sigma = hidden_output_1[:-1], hidden_output_1[-1]
+        hidden_input_2, sigma = hidden_output_1[:, :-1], hidden_output_1[:, -1]
 
-        hidden_input_3 = torch.cat((hidden_input_2, encoded_dir))
+        hidden_input_3 = torch.cat((hidden_input_2, encoded_dir), dim=1)
         hidden_output_2 = self.block_3(hidden_input_3)
 
         color = self.block_4(hidden_output_2)
 
         return color, sigma
 
-    @staticmethod
-    def compute_t(alphas):
-        transformed = 1 - alphas
-        return torch.cumprod(transformed, dim=0)
 
     def render_image(self, origins, directions, tn = 0, tf = 1, samples = 128):
-
         device = origins.device
+
         t = torch.linspace(tn, tf, samples, device=device).expand(origins.shape[0], samples).expand(origins.shape[0], samples)
 
         mid = (t[:, :-1] + t[:, 1:]) / 2.
@@ -81,32 +74,34 @@ class NeRF(nn.Module):
         u = torch.rand(t.shape, device=device)
         t = lower + (upper - lower) * u
 
-        delta = t[:, 1:] - t[:, :-1]
+        delta = torch.cat((t[:, 1:] - t[:, :-1], torch.tensor([1e10], device=device).expand(origins.shape[0], 1)), -1)
+        delta = torch.flatten(delta)
 
         coords = origins.unsqueeze(1) + t.unsqueeze(2) * directions.unsqueeze(1)
+        directions = directions.expand(samples, directions.shape[0], 3).transpose(0, 1)
 
         colors, sigma = self(coords.reshape(-1, 3), directions.reshape(-1, 3))
 
         alpha = 1 - torch.exp(-sigma * delta)
 
-        weights = self.compute_t(alpha) * alpha
-        c = (weights * colors).sum(dim=1)
+        weights = torch.cumprod(1 - alpha, dim=0) * alpha
+
+        prod = weights.reshape((t.shape[0], 128, 1)) * colors.reshape((t.shape[0], 128, 3))
+        c = prod.sum(dim=1)
 
         return c
 
     @torch.no_grad()
     def test(self, tn, tf, dataset, chunk_size=10, img_index=0, samples=128, height=400, width=400):
-        device = self.device
-
         origins = dataset[img_index * height * width: (img_index + 1) * height * width, :3]
         directions = dataset[img_index * height * width: (img_index + 1) * height * width, 3:6]
 
         data = []
         for i in range(int(np.ceil(height / chunk_size))):
-            ray_origins = origins[i * width * chunk_size: (i + 1) * width * chunk_size].to(device)
-            ray_directions = directions[i * width * chunk_size: (i + 1) * width * chunk_size].to(device)
+            ray_origins = origins[i * width * chunk_size: (i + 1) * width * chunk_size].to(self.device)
+            ray_directions = directions[i * width * chunk_size: (i + 1) * width * chunk_size].to(self.device)
 
-            regenerated_px_values = self.render_image(model, ray_origins, ray_directions, tn=tn, tf=tf, samples=samples)
+            regenerated_px_values = self.render_image(ray_origins, ray_directions, tn=tn, tf=tf, samples=samples)
             data.append(regenerated_px_values)
         img = torch.cat(data).data.cpu().numpy().reshape(height, width, 3)
 
@@ -135,7 +130,6 @@ class NeRF(nn.Module):
             for img_index in range(200):
                 self.test(tn, tf, test_data, img_index=img_index, samples=samples, height=height, width=width)
         return training_loss
-
 
 device = 'cpu'
 
