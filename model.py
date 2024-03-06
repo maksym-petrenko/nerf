@@ -37,17 +37,12 @@ class NeRF(nn.Module):
         self.device = device
 
 
-    def positional_encoding(self, x, L):
-        x = torch.tensor(x)
-
-        if len(x.shape) != 1:
-            raise ValueError("Input tensor must be 1-dimensional (shape: (n,)).")
-
-        encoding = torch.zeros(x.shape[0], L * 2)
-
+    @staticmethod
+    def positional_encoding(x, L):
+        encoding = torch.zeros(x.shape[0], L * 2 * x.shape[1])
         for power in range(L):
-            encoding[:, power * 2] = torch.sin((2 ** power) * torch.pi * x)
-            encoding[:, power * 2 + 1] = torch.cos((2 ** power) * torch.pi * x)
+            encoding[:, power * 2 * L:(power * 2 + 1)*L] = torch.sin((2 ** power) * torch.pi * x)
+            encoding[:, (power * 2 + 1)*L:(power * 2 + 2)*L] = torch.cos((2 ** power) * torch.pi * x)
 
         return torch.cat((x, encoding), dim=1)
 
