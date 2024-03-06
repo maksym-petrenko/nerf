@@ -6,27 +6,56 @@ class NeRF(nn.Module):
 
     def __init__(self,
             L: int,
-            hidden_layers: int,
-            hidden_dim: int
         ) -> None:
-        super.__init__()
+        super().__init__()
         self.L = L
 
+        self.block_1 = nn.Sequential(
+            nn.Linear(self.L * 6 + 3, 256), nn.ReLU(),
+            nn.Linear(256, 256), nn.ReLU(),
+            nn.Linear(256, 256), nn.ReLU(),
+            nn.Linear(256, 256), nn.ReLU()
+        )
 
+        self.block_2 = nn.Sequential(
+            nn.Linear(self.L * 6 + 259, 256), nn.ReLU(),
+            nn.Linear(256, 256), nn.ReLU(),
+            nn.Linear(256, 256), nn.ReLU(),
+            nn.Linear(256, 256), nn.ReLU()
+        )
+
+        self.block_3 = nn.Sequential(nn.Linear(self.L * 6 + 259, 128), nn.ReLU())
+
+        self.block_4 = nn.Sequential(nn.Linear(128, 3), nn.Sigmoid())
 
 
     def positional_encoding(self, x):
-        encoding = list(x)
+        x = torch.tensor(x)
+
+        if len(x.shape) != 1:
+            raise ValueError("Input tensor must be 1-dimensional (shape: (n,)).")
+
+        encoding = torch.zeros(x.shape[0], self.L * 2)
+
         for power in range(self.L):
-            encoding.extend([
-                torch.sin((2 ** power) * torch.pi * x),
-                torch.cos((2 ** power) * torch.pi * x)
-            ])
-        return torch.cat(encoding, dim=-1)
+            encoding[:, power * 2] = torch.sin((2 ** power) * torch.pi * x)
+            encoding[:, power * 2 + 1] = torch.cos((2 ** power) * torch.pi * x)
 
-    def forward(self, x):
-        return self.model(self.positional_encoding(x))
+        return torch.cat((torch.flatten(x), torch.flatten(encoding)))
 
-model = NeRF(2, 1, 1)
+def forward(self, position, direction):
+        encoded_pos = self.positional_encoding(position)
+        encoded_dir = self.positional_encoding(direction)
 
-print(model.positional_encoding([1, 2, 3, 4, 5]))
+        hidden_1 = self.block_1(encoded_pos)
+        hidden_input_1 = torch.cat(hidden_1, encoded_pos)
+
+        hidden_output_1 = self.block_2(hidden_input_1)
+        hidden_input_2, sigma = hidden_output_1[:-1], hidden_output_1[-1]
+
+        hidden_input_3 = torch.cat(hidden_input_2, encoded_dir)
+        hidden_output_2 = self.block_3(hidden_input_3)
+
+        color = self.block_4(hidden_output_2)
+
+        return color, sigma
