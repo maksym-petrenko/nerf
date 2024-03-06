@@ -43,7 +43,7 @@ class NeRF(nn.Module):
 
         return torch.cat((torch.flatten(x), torch.flatten(encoding)))
 
-def forward(self, position, direction):
+    def forward(self, position, direction):
         encoded_pos = self.positional_encoding(position)
         encoded_dir = self.positional_encoding(direction)
 
