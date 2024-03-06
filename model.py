@@ -24,7 +24,7 @@ class NeRF(nn.Module):
             nn.Linear(256, 256), nn.ReLU()
         )
 
-        self.block_3 = nn.Sequential(nn.Linear(self.L * 6 + 259, 128), nn.ReLU())
+        self.block_3 = nn.Sequential(nn.Linear(self.L * 4 + 258, 128), nn.ReLU())
 
         self.block_4 = nn.Sequential(nn.Linear(128, 3), nn.Sigmoid())
 
@@ -59,3 +59,18 @@ class NeRF(nn.Module):
         color = self.block_4(hidden_output_2)
 
         return color, sigma
+
+    @staticmethod
+    def compute_t(alphas):
+        transformed = 1 - alphas
+        return torch.cumprod(transformed, dim=0)
+
+    def render_image(self, ):
+        pass
+
+
+model = NeRF(1)
+
+arr = torch.tensor([0.5,0.24,0.124])
+
+print(model.compute_t(arr))
