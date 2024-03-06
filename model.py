@@ -10,7 +10,7 @@ class NeRF(nn.Module):
     def __init__(self,
             pos_L: int = 10,
             cam_L: int = 4,
-            device: str = "cuda"
+            device: str = "cpu"
         ) -> None:
         super().__init__()
         self.pos_L = pos_L
@@ -41,8 +41,8 @@ class NeRF(nn.Module):
     def positional_encoding(x, L):
         encoding = torch.zeros(x.shape[0], L * 2 * x.shape[1])
         for power in range(L):
-            encoding[:, power * 2 * L:(power * 2 + 1)*L] = torch.sin((2 ** power) * torch.pi * x)
-            encoding[:, (power * 2 + 1)*L:(power * 2 + 2)*L] = torch.cos((2 ** power) * torch.pi * x)
+            encoding[:, power * 2:power * 2 + x.shape[1]] = torch.sin((2 ** power) * torch.pi * x)
+            encoding[:, power * 2 + x.shape[1]:power * 2 + 2 * x.shape[1]] = torch.cos((2 ** power) * torch.pi * x)
 
         return torch.cat((x, encoding), dim=1)
 
@@ -51,12 +51,14 @@ class NeRF(nn.Module):
         encoded_dir = self.positional_encoding(direction, self.cam_L)
 
         hidden_1 = self.block_1(encoded_pos)
-        hidden_input_1 = torch.cat(hidden_1, encoded_pos)
+        print(hidden_1.shape)
+        print(encoded_pos.shape)
+        hidden_input_1 = torch.cat((hidden_1, encoded_pos))
 
         hidden_output_1 = self.block_2(hidden_input_1)
         hidden_input_2, sigma = hidden_output_1[:-1], hidden_output_1[-1]
 
-        hidden_input_3 = torch.cat(hidden_input_2, encoded_dir)
+        hidden_input_3 = torch.cat((hidden_input_2, encoded_dir))
         hidden_output_2 = self.block_3(hidden_input_3)
 
         color = self.block_4(hidden_output_2)
@@ -71,19 +73,19 @@ class NeRF(nn.Module):
     def render_image(self, origins, directions, tn = 0, tf = 1, samples = 128):
 
         device = origins.device
-        t = torch.linspace(tn, tf, samples, device=device).expand(origins.shape[0], samples)
+        t = torch.linspace(tn, tf, samples, device=device).expand(origins.shape[0], samples).expand(origins.shape[0], samples)
 
-        mid = (t[:-1] + t[1:]) / 2.
-        lower = torch.cat((t[:1], mid), -1)
-        upper = torch.cat((mid, t[-1:]), -1)
+        mid = (t[:, :-1] + t[:, 1:]) / 2.
+        lower = torch.cat((t[:, :1], mid), -1)
+        upper = torch.cat((mid, t[:, -1:]), -1)
         u = torch.rand(t.shape, device=device)
         t = lower + (upper - lower) * u
 
-        delta = t[1:] - t[:-1]
+        delta = t[:, 1:] - t[:, :-1]
 
-        coords = origins + t * directions
+        coords = origins.unsqueeze(1) + t.unsqueeze(2) * directions.unsqueeze(1)
 
-        colors, sigma = self(coords, directions)
+        colors, sigma = self(coords.reshape(-1, 3), directions.reshape(-1, 3))
 
         alpha = 1 - torch.exp(-sigma * delta)
 
@@ -146,4 +148,4 @@ scheduler = torch.optim.lr_scheduler.MultiStepLR(model_optimizer, milestones=[2,
 
 data_loader = torch.utils.data.DataLoader(training_dataset, batch_size=1024, shuffle=True)
 
-model.train(model, model_optimizer, scheduler, data_loader, epochs=16, tn=2, tf=6, samples=128, height=400, width=400)
+model.train(model_optimizer, scheduler, data_loader, test_data=testing_dataset, epochs=16, tn=2, tf=6, samples=128, height=400, width=400)
