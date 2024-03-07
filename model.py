@@ -10,7 +10,7 @@ class NeRF(nn.Module):
     def __init__(self,
             pos_L: int = 10,
             cam_L: int = 4,
-            device: str = "cpu"
+            device: str = "cuda"
         ) -> None:
         super().__init__()
         self.pos_L = pos_L
@@ -84,12 +84,17 @@ class NeRF(nn.Module):
 
         alpha = 1 - torch.exp(-sigma * delta)
 
-        weights = torch.cumprod(1 - alpha, dim=0) * alpha
+        ones = torch.ones(alpha.size(0), 1)
+        new_tensor = torch.cat((ones, alpha[:, :-1]), dim=1)
+        T = torch.cumprod(new_tensor, 1)
+
+        weights = T * alpha
 
         prod = weights.reshape((t.shape[0], 128, 1)) * colors.reshape((t.shape[0], 128, 3))
         c = prod.sum(dim=1)
 
-        return c
+        weight_sum = weights.reshape((t.shape[0], 128, 1)).sum(-1).sum(-1)
+        return c + 1 - weight_sum.unsqueeze(-1)
 
     @torch.no_grad()
     def test(self, tn, tf, dataset, chunk_size=10, img_index=0, samples=128, height=400, width=400):
