@@ -81,7 +81,7 @@ class NeRF(nn.Module):
 
         plt.figure()
         plt.imshow(img)
-        plt.savefig(f'/content/drive/MyDrive/generated_nerf/img_{epoch}_{img_index}.png')
+        plt.savefig(f'generated_nerf/img_{epoch}_{img_index}.png')
         plt.close()
 
 
